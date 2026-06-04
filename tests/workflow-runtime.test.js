@@ -1,6 +1,6 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert');
-const { WorkflowEventBus, StateManager, AgentPool, TeamManager } = require('../scripts/workflow-runtime.js');
+const { WorkflowEventBus, StateManager, AgentPool, TeamManager, WorkflowContext } = require('../scripts/workflow-runtime.js');
 
 describe('WorkflowEventBus', () => {
   test('emits events as JSON lines', () => {
@@ -207,5 +207,182 @@ describe('TeamManager', () => {
     });
     
     assert.ok(iterations <= 4);
+  });
+});
+
+describe('WorkflowContext', () => {
+  test('spawns agent and returns result', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    const result = await ctx.spawnAgent('builder', { task: 'Build it' }, {
+      execute: async (agent) => ({ output: 'built' })
+    });
+    
+    assert.ok(result);
+  });
+
+  test('spawns multiple agents in parallel', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    const results = await ctx.spawnAgents([
+      { type: 'builder', task: 'A' },
+      { type: 'explorer', task: 'B' }
+    ], {
+      execute: async (agent) => ({ output: `done-${agent.type}` })
+    });
+    
+    assert.strictEqual(results.length, 2);
+  });
+
+  test('runs teams with verification', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    const report = await ctx.runTeams([
+      {
+        id: 'team-1',
+        workers: [{ id: 'w1', type: 'builder', task: 'Build' }],
+        verifier: { id: 'v1', scope: 'full' }
+      }
+    ], {
+      executeAgent: async (agent) => ({ output: 'done' })
+    });
+    
+    assert.ok(report.length > 0);
+  });
+
+  test('verifies result', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    const result = await ctx.verify({ output: 'test' }, {
+      verify: async () => ({ status: 'pass' })
+    });
+    
+    assert.ok(result);
+  });
+
+  test('verifyAll checks multiple results', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    const result = await ctx.verifyAll([{ a: 1 }, { b: 2 }], {
+      verify: async () => ({ status: 'pass' })
+    });
+    
+    assert.ok(result);
+  });
+
+  test('sets and gets memory', () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    ctx.setMemory('key', 'value');
+    assert.strictEqual(ctx.getMemory('key'), 'value');
+  });
+
+  test('gets memory keys', () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    ctx.setMemory('a', 1);
+    ctx.setMemory('b', 2);
+    
+    assert.deepStrictEqual(ctx.getMemoryKeys().sort(), ['a', 'b']);
+  });
+
+  test('deletes memory key', () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    ctx.setMemory('key', 'value');
+    ctx.deleteMemory('key');
+    
+    assert.strictEqual(ctx.getMemory('key'), undefined);
+  });
+
+  test('clears all memory', () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    ctx.setMemory('a', 1);
+    ctx.setMemory('b', 2);
+    ctx.clearMemory();
+    
+    assert.deepStrictEqual(ctx.getMemoryKeys(), []);
+  });
+
+  test('cached returns cached value on second call', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    let calls = 0;
+    const fn = async () => { calls++; return 'result'; };
+    
+    const r1 = await ctx.cached('k', fn);
+    const r2 = await ctx.cached('k', fn);
+    
+    assert.strictEqual(r1, 'result');
+    assert.strictEqual(r2, 'result');
+    assert.strictEqual(calls, 1);
+  });
+
+  test('getAgentStats returns counts', () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+    
+    pool.createAgent('builder');
+    pool.createAgent('explorer');
+    
+    const stats = ctx.getAgentStats();
+    assert.strictEqual(stats.total, 2);
+    assert.strictEqual(stats.active, 2);
+    assert.strictEqual(stats.completed, 0);
   });
 });

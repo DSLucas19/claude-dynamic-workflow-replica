@@ -244,4 +244,121 @@ class TeamManager {
   }
 }
 
-module.exports = { WorkflowEventBus, StateManager, AgentPool, TeamManager };
+class WorkflowContext {
+  constructor(options) {
+    this.pool = options.pool;
+    this.teamManager = options.teamManager;
+    this.bus = options.bus;
+    this.state = options.state;
+    this.memory = new Map();
+  }
+
+  async spawnAgent(type, options, execOptions = {}) {
+    const agent = this.pool.createAgent(type, options);
+    this.bus.emit('task_start', { agentId: agent.id, type });
+
+    try {
+      const execute = execOptions.execute || this._defaultExecute.bind(this);
+      const result = await execute(agent);
+      this.pool.completeAgent(agent.id, result);
+      this.bus.emit('task_complete', { agentId: agent.id, result });
+      return result;
+    } catch (err) {
+      this.pool.failAgent(agent.id, err);
+      this.bus.emit('workflow_error', { agentId: agent.id, error: err.message });
+      throw err;
+    }
+  }
+
+  async spawnAgents(tasks, execOptions = {}) {
+    const promises = tasks.map(task =>
+      this.spawnAgent(task.type, task, execOptions)
+    );
+    return Promise.all(promises);
+  }
+
+  async runTeams(teams, options = {}) {
+    const assembled = teams.map(t => this.teamManager.assembleTeam(t));
+    return this.teamManager.runTeams(assembled, options);
+  }
+
+  async verify(result, options = {}) {
+    const verifyFn = options.verify || this._defaultVerify.bind(this);
+    return verifyFn(result);
+  }
+
+  async verifyAll(results, options = {}) {
+    const verifyFn = options.verify || this._defaultVerify.bind(this);
+    const verifications = await Promise.all(
+      results.map(r => verifyFn(r))
+    );
+    return {
+      allPassed: verifications.every(v => v.status === 'pass'),
+      results: verifications
+    };
+  }
+
+  setMemory(key, value) {
+    this.memory.set(key, value);
+  }
+
+  getMemory(key) {
+    return this.memory.get(key);
+  }
+
+  getMemoryKeys() {
+    return Array.from(this.memory.keys());
+  }
+
+  deleteMemory(key) {
+    this.memory.delete(key);
+  }
+
+  clearMemory() {
+    this.memory.clear();
+  }
+
+  async cached(key, fn) {
+    const cacheKey = `cache:${key}`;
+    const existing = this.memory.get(cacheKey);
+    if (existing !== undefined) return existing;
+    const result = await fn();
+    this.memory.set(cacheKey, result);
+    return result;
+  }
+
+  checkpoint() {
+    this.bus.emit('checkpoint', {
+      agents: this.pool.count(),
+      memoryKeys: this.getMemoryKeys().length
+    });
+  }
+
+  reportProgress(data) {
+    this.bus.emit('progress_report', data);
+  }
+
+  getState() {
+    return this.state.toJSON();
+  }
+
+  getAgentStats() {
+    const all = this.pool.getAllAgents();
+    return {
+      total: all.length,
+      active: all.filter(a => a.status === 'running').length,
+      completed: all.filter(a => a.status === 'completed').length,
+      failed: all.filter(a => a.status === 'failed').length
+    };
+  }
+
+  async _defaultExecute(agent) {
+    return { output: `agent ${agent.id} completed` };
+  }
+
+  async _defaultVerify(result) {
+    return { status: 'pass' };
+  }
+}
+
+module.exports = { WorkflowEventBus, StateManager, AgentPool, TeamManager, WorkflowContext };
