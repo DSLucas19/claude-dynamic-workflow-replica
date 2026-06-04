@@ -387,6 +387,80 @@ describe('WorkflowContext', () => {
   });
 });
 
+describe('Performance Optimizations', () => {
+  test('cached prevents redundant computation', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+
+    let computeCount = 0;
+    const expensiveFn = async () => {
+      computeCount++;
+      return { data: 'expensive' };
+    };
+
+    await ctx.cached('key1', expensiveFn);
+    await ctx.cached('key1', expensiveFn);
+    await ctx.cached('key1', expensiveFn);
+    await ctx.cached('key1', expensiveFn);
+    await ctx.cached('key1', expensiveFn);
+
+    assert.strictEqual(computeCount, 1);
+  });
+
+  test('verifyAll processes results in parallel', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+
+    const results = [{ a: 1 }, { b: 2 }, { c: 3 }];
+
+    let maxConcurrent = 0;
+    let currentConcurrent = 0;
+
+    const verification = await ctx.verifyAll(results, {
+      verify: async (r) => {
+        currentConcurrent++;
+        maxConcurrent = Math.max(maxConcurrent, currentConcurrent);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        currentConcurrent--;
+        return { status: 'pass' };
+      }
+    });
+
+    assert.ok(verification.allPassed);
+    assert.ok(maxConcurrent > 1);
+  });
+
+  test('spawnAgents runs in parallel', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    const bus = new WorkflowEventBus();
+    const state = new StateManager();
+    const ctx = new WorkflowContext({ pool, teamManager: manager, bus, state });
+
+    const start = Date.now();
+
+    await ctx.spawnAgents([
+      { type: 'builder', task: 'A' },
+      { type: 'builder', task: 'B' },
+      { type: 'builder', task: 'C' }
+    ], {
+      execute: async () => {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        return { done: true };
+      }
+    });
+
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 250);
+  });
+});
+
 describe('WorkflowRuntime', () => {
   test('executes workflow function', async () => {
     const runtime = new WorkflowRuntime();
