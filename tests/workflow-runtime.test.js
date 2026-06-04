@@ -1,6 +1,6 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert');
-const { WorkflowEventBus, StateManager } = require('../scripts/workflow-runtime.js');
+const { WorkflowEventBus, StateManager, AgentPool } = require('../scripts/workflow-runtime.js');
 
 describe('WorkflowEventBus', () => {
   test('emits events as JSON lines', () => {
@@ -72,5 +72,53 @@ describe('StateManager', () => {
     const manager = new StateManager();
     manager.fromJSON('{"key":"value"}');
     assert.strictEqual(manager.get('key'), 'value');
+  });
+});
+
+describe('AgentPool', () => {
+  test('creates agent with id and type', () => {
+    const pool = new AgentPool();
+    const agent = pool.createAgent('builder');
+    
+    assert.strictEqual(agent.type, 'builder');
+    assert.ok(agent.id.startsWith('agent-'));
+  });
+
+  test('tracks agent count', () => {
+    const pool = new AgentPool();
+    pool.createAgent('builder');
+    pool.createAgent('explorer');
+    
+    assert.strictEqual(pool.count(), 2);
+  });
+
+  test('completes agent and updates status', () => {
+    const pool = new AgentPool();
+    const agent = pool.createAgent('builder');
+    
+    pool.completeAgent(agent.id, { result: 'done' });
+    
+    const completed = pool.getAgent(agent.id);
+    assert.strictEqual(completed.status, 'completed');
+    assert.deepStrictEqual(completed.result, { result: 'done' });
+  });
+
+  test('fails agent and records error', () => {
+    const pool = new AgentPool();
+    const agent = pool.createAgent('builder');
+    
+    pool.failAgent(agent.id, new Error('timeout'));
+    
+    const failed = pool.getAgent(agent.id);
+    assert.strictEqual(failed.status, 'failed');
+    assert.strictEqual(failed.error, 'timeout');
+  });
+
+  test('limits concurrent agents', () => {
+    const pool = new AgentPool({ maxConcurrent: 2 });
+    pool.createAgent('builder');
+    pool.createAgent('builder');
+    
+    assert.throws(() => pool.createAgent('builder'), /limit/i);
   });
 });
