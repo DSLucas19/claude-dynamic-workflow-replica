@@ -192,6 +192,39 @@ module.exports = async function workflow(ctx) {
 | `docs/AUTO_VERIFY_PROTOCOL.md` | Full adversarial verification protocol |
 | `docs/DYNAMIC_WORKFLOWS_PROTOCOL.md` | Dynamic workflows protocol reference |
 
+## v2.0 Features
+
+### OpenTUI Dashboard
+
+Launch interactive TUI dashboard:
+
+```bash
+/workflow workflow.js --state state.json
+```
+
+### Agent Memory
+
+Agents share context within a single workflow run:
+
+```javascript
+ctx.setMemory('key', 'value');
+ctx.getMemory('key');
+```
+
+### Advanced Patterns
+
+- Conditional branching
+- Loops with termination conditions
+- Sub-workflows
+- Error recovery with fallback
+- Circuit breaker pattern
+
+### Performance Optimizations
+
+- Agent pooling (reuse completed agents)
+- Result caching
+- Parallel verification
+
 ## When to Use
 
 - Multiple independent tasks that benefit from parallel execution
