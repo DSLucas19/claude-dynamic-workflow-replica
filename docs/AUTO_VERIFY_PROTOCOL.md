@@ -474,6 +474,75 @@ What will cause the most pain later.]
 
 ---
 
+
+### With Dynamic Workflows
+- Auto-verify integrates with the Dynamic Workflow Runtime for JavaScript-orchestrated execution
+- Workflow scripts can be generated from task descriptions using the workflow generator
+- State persistence enables resumable verification loops across sessions
+- Automatic checkpointing saves progress every 30 seconds
+- Agent pool management supports up to 16 concurrent agents and 1000 total agents
+- Event monitoring provides real-time progress via JSON line events
+- WorkflowContext API provides `spawnAgent`, `spawnAgents`, `runTeams`, `verify`, `checkpoint` methods
+- Available patterns: `team-adversarial`, `parallel-fanout`, `sequential`, `research-build`, `audit`, `migration`
+
+#### Example: Dynamic Workflow with Auto-Verify
+
+```bash
+# Generate team-based adversarial workflow
+node scripts/workflow-generator.js \
+  --pattern team-adversarial \
+  --task "Build user auth with JWT" \
+  --output workflow.js
+
+# Execute with state persistence
+node scripts/workflow-runtime.js workflow.js \
+  --state state.json \
+  --checkpoint ./checkpoints
+
+# Monitor progress
+node scripts/workflow-runtime.js workflow.js 2>/dev/null | while read -r line; do
+  type=$(echo "$line" | jq -r '.type')
+  case "$type" in
+    task_start) echo "Agent started: $(echo "$line" | jq -r '.agentId')" ;;
+    task_complete) echo "Agent completed: $(echo "$line" | jq -r '.agentId')" ;;
+    verification_round) echo "Verification: $(echo "$line" | jq -r '.verdict')" ;;
+    checkpoint) echo "Checkpoint saved" ;;
+  esac
+done
+```
+
+#### Example: Workflow Script with Auto-Verify
+
+```javascript
+module.exports = async function workflow(ctx) {
+  // Research phase
+  const research = await ctx.spawnAgent('explorer', {
+    task: 'Research codebase for auth patterns...'
+  });
+  ctx.checkpoint();
+
+  // Implementation phase with teams
+  const report = await ctx.runTeams([
+    {
+      id: 'auth-team',
+      workers: [
+        { id: 'backend', task: 'JWT middleware', type: 'builder' },
+        { id: 'frontend', task: 'Login component', type: 'builder' }
+      ],
+      verifier: { id: 'auth-verifier', scope: 'full' }
+    }
+  ]);
+
+  // Final verification
+  const verification = await ctx.verify(report, { scope: 'full' });
+  ctx.checkpoint();
+
+  return { research, implementation: report, verification };
+};
+```
+
+---
+
 ## Failure Modes
 
 ### Worker Stuck

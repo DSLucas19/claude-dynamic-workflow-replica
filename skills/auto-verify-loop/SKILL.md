@@ -551,6 +551,148 @@ What will cause the most pain later.]
 
 ---
 
+
+---
+
+## Dynamic Workflow Integration
+
+The auto-verify loop integrates with the **Dynamic Workflow Runtime** for
+JavaScript-orchestrated execution with state management and checkpointing.
+
+### Generating Workflow Scripts
+
+Use the workflow generator to create workflow scripts from task descriptions:
+
+```bash
+# Generate team-based adversarial workflow
+node scripts/workflow-generator.js \
+  --pattern team-adversarial \
+  --task "Build user auth with JWT" \
+  --output workflow.js
+
+# Generate with custom teams
+node scripts/workflow-generator.js \
+  --pattern team-adversarial \
+  --task "Build payment system" \
+  --teams '[{"id":"api-team","workers":[{"id":"w1","task":"Payment API","type":"builder"}],"verifier":{"id":"v1","scope":"full"}}]' \
+  --output workflow.js
+```
+
+### Available Patterns
+
+| Pattern | Description | Use Case |
+|---------|-------------|----------|
+| `team-adversarial` | Team-based with adversarial verifiers | Quality-critical features |
+| `parallel-fanout` | Parallel agents, merge results | Research, data gathering |
+| `sequential` | Sequential pipeline with gates | Dependent tasks, migrations |
+| `research-build` | Research → Build → Verify | New features, unfamiliar code |
+| `audit` | Multi-angle code audit | Code reviews, pre-deployment |
+| `migration` | Parallel migration with rollback | Database migrations, refactors |
+
+### Executing Workflows
+
+```bash
+# Run with state persistence and checkpointing
+node scripts/workflow-runtime.js workflow.js \
+  --state state.json \
+  --checkpoint ./checkpoints
+
+# Resume from saved state
+node scripts/workflow-runtime.js workflow.js --state state.json
+
+# Monitor progress
+node scripts/workflow-runtime.js workflow.js 2>/dev/null | while read -r line; do
+  type=$(echo "$line" | jq -r '.type')
+  case "$type" in
+    task_start) echo "Agent started: $(echo "$line" | jq -r '.agentId')" ;;
+    task_complete) echo "Agent completed: $(echo "$line" | jq -r '.agentId')" ;;
+    verification_round) echo "Verification: $(echo "$line" | jq -r '.verdict')" ;;
+    checkpoint) echo "Checkpoint saved" ;;
+  esac
+done
+```
+
+### WorkflowContext API
+
+Workflow scripts use the `WorkflowContext` API:
+
+```javascript
+module.exports = async function workflow(ctx) {
+  // Spawn single agent
+  const result = await ctx.spawnAgent('builder', { task: '...' });
+
+  // Spawn multiple agents in parallel
+  const results = await ctx.spawnAgents([
+    { type: 'explorer', task: 'Research...', id: 'research' },
+    { type: 'builder', task: 'Build...', id: 'build' }
+  ]);
+
+  // Run teams with adversarial verification
+  const report = await ctx.runTeams([
+    {
+      id: 'team-1',
+      workers: [
+        { id: 'worker-a', task: 'API', type: 'builder' },
+        { id: 'worker-b', task: 'UI', type: 'builder' }
+      ],
+      verifier: { id: 'verifier-1', scope: 'full' }
+    }
+  ]);
+
+  // Verify a result
+  const verification = await ctx.verify(result, { scope: 'full' });
+
+  // Save checkpoint
+  ctx.checkpoint();
+
+  return report;
+};
+```
+
+### Agent Pool Management
+
+The runtime manages an agent pool with these limits:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `MAX_CONCURRENT_AGENTS` | 16 | Max agents running simultaneously |
+| `MAX_TOTAL_AGENTS` | 1000 | Max agents per workflow execution |
+| `AGENT_TIMEOUT_MS` | 300000 | Timeout per agent (5 minutes) |
+| `MAX_ITERATIONS_PER_TEAM` | 5 | Max verification loops per team |
+| `CHECKPOINT_INTERVAL_MS` | 30000 | Checkpoint frequency (30 seconds) |
+
+### Event System
+
+The runtime emits JSON line events for monitoring:
+
+| Event | Description |
+|-------|-------------|
+| `workflow_start` | Workflow execution begins |
+| `task_start` | Agent begins executing |
+| `task_complete` | Agent finishes |
+| `team_assembly` | Teams formed |
+| `verification_round` | Verifier makes decision |
+| `checkpoint` | State checkpoint saved |
+| `progress_report` | Progress update |
+| `workflow_complete` | Workflow finished |
+
+### State Management
+
+- Automatic checkpoints every 30 seconds
+- State persisted to JSON file for resumability
+- Resume workflows from last checkpoint
+- Agent pool statistics tracked
+
+### Ultra-Work Integration
+
+For long autonomous sessions, use with `/ultra-work`:
+
+1. Ultra-work generates workflow script for verification phase
+2. Runtime executes with state persistence
+3. Results feed back into ultra-work progress
+
+---
+
 ## Integration with Orchestrator
 
 ### Dispatching the Loop
