@@ -1,6 +1,6 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert');
-const { WorkflowEventBus, StateManager, AgentPool } = require('../scripts/workflow-runtime.js');
+const { WorkflowEventBus, StateManager, AgentPool, TeamManager } = require('../scripts/workflow-runtime.js');
 
 describe('WorkflowEventBus', () => {
   test('emits events as JSON lines', () => {
@@ -120,5 +120,92 @@ describe('AgentPool', () => {
     pool.createAgent('builder');
     
     assert.throws(() => pool.createAgent('builder'), /limit/i);
+  });
+});
+
+describe('TeamManager', () => {
+  test('assembles team with workers and verifier', () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    
+    const team = manager.assembleTeam({
+      id: 'team-1',
+      workers: [
+        { id: 'w1', type: 'builder', task: 'Build feature' }
+      ],
+      verifier: { id: 'v1', scope: 'full' }
+    });
+    
+    assert.strictEqual(team.id, 'team-1');
+    assert.strictEqual(team.workers.length, 1);
+    assert.ok(team.verifier);
+  });
+
+  test('runs team and collects results', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    
+    const team = manager.assembleTeam({
+      id: 'team-1',
+      workers: [
+        { id: 'w1', type: 'builder', task: 'Build' }
+      ],
+      verifier: { id: 'v1', scope: 'full' }
+    });
+
+    const result = await manager.runTeam(team, {
+      executeAgent: async (agent) => ({ output: `done-${agent.id}` })
+    });
+    
+    assert.strictEqual(result.id, 'team-1');
+    assert.ok(result.workers.length > 0);
+  });
+
+  test('runs multiple teams sequentially', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool);
+    
+    const team1 = manager.assembleTeam({
+      id: 'team-1',
+      workers: [{ id: 'w1', type: 'builder', task: 'A' }],
+      verifier: { id: 'v1', scope: 'full' }
+    });
+    
+    const team2 = manager.assembleTeam({
+      id: 'team-2',
+      workers: [{ id: 'w2', type: 'builder', task: 'B' }],
+      verifier: { id: 'v2', scope: 'full' }
+    });
+
+    const results = await manager.runTeams([team1, team2], {
+      executeAgent: async (agent) => ({ output: `done-${agent.id}` })
+    });
+    
+    assert.strictEqual(results.length, 2);
+  });
+
+  test('respects max iterations per team', async () => {
+    const pool = new AgentPool();
+    const manager = new TeamManager(pool, { maxIterations: 2 });
+    
+    const team = manager.assembleTeam({
+      id: 'team-1',
+      workers: [{ id: 'w1', type: 'builder', task: 'Build' }],
+      verifier: { id: 'v1', scope: 'full' }
+    });
+
+    let iterations = 0;
+    const result = await manager.runTeam(team, {
+      executeAgent: async (agent) => {
+        iterations++;
+        return { output: 'done' };
+      },
+      verify: async () => {
+        iterations++;
+        return { status: 'needs_rework' };
+      }
+    });
+    
+    assert.ok(iterations <= 4);
   });
 });

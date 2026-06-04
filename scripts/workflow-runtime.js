@@ -3,6 +3,7 @@ const EventEmitter = require('events');
 const MAX_CONCURRENT_AGENTS = 16;
 const MAX_TOTAL_AGENTS = 1000;
 const AGENT_TIMEOUT_MS = 300000;
+const MAX_ITERATIONS_PER_TEAM = 5;
 
 class WorkflowEventBus extends EventEmitter {
   constructor() {
@@ -146,4 +147,101 @@ class AgentPool {
   }
 }
 
-module.exports = { WorkflowEventBus, StateManager, AgentPool };
+class TeamManager {
+  constructor(agentPool, options = {}) {
+    this.agentPool = agentPool;
+    this.maxIterations = options.maxIterations || MAX_ITERATIONS_PER_TEAM;
+    this.teams = new Map();
+  }
+
+  assembleTeam(config) {
+    const team = {
+      id: config.id,
+      workers: config.workers.map(w => ({
+        ...w,
+        status: 'pending',
+        result: null
+      })),
+      verifier: {
+        ...config.verifier,
+        status: 'pending',
+        result: null
+      },
+      status: 'assembled',
+      iterations: 0
+    };
+
+    this.teams.set(team.id, team);
+    return team;
+  }
+
+  async runTeam(team, options = {}) {
+    const executeAgent = options.executeAgent;
+    const verify = options.verify || this._defaultVerify.bind(this);
+
+    team.status = 'running';
+
+    for (let i = 0; i < this.maxIterations; i++) {
+      team.iterations = i + 1;
+
+      // Execute workers
+      for (const worker of team.workers) {
+        worker.status = 'running';
+        try {
+          worker.result = await executeAgent(worker);
+          worker.status = 'completed';
+        } catch (err) {
+          worker.status = 'failed';
+          worker.error = err.message;
+          team.status = 'failed';
+          return team;
+        }
+      }
+
+      // Run verifier
+      team.verifier.status = 'running';
+      const verification = await verify(team);
+
+      if (verification.status === 'pass' || verification.status === 'approved') {
+        team.verifier.status = 'completed';
+        team.verifier.result = verification;
+        team.status = 'converged';
+        return team;
+      }
+
+      team.verifier.status = 'pending';
+      // Loop continues for rework
+    }
+
+    team.status = 'max_iterations';
+    return team;
+  }
+
+  async runTeams(teams, options = {}) {
+    const results = [];
+    for (const team of teams) {
+      const result = await this.runTeam(team, options);
+      results.push(result);
+    }
+    return results;
+  }
+
+  async _defaultVerify(team) {
+    const allCompleted = team.workers.every(w => w.status === 'completed');
+    return { status: allCompleted ? 'pass' : 'needs_rework' };
+  }
+
+  getTeam(id) {
+    return this.teams.get(id);
+  }
+
+  getAllTeams() {
+    return Array.from(this.teams.values());
+  }
+
+  clear() {
+    this.teams.clear();
+  }
+}
+
+module.exports = { WorkflowEventBus, StateManager, AgentPool, TeamManager };
