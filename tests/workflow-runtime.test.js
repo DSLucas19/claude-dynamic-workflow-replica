@@ -1,6 +1,6 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert');
-const { WorkflowEventBus, StateManager, AgentPool, TeamManager, WorkflowContext } = require('../scripts/workflow-runtime.js');
+const { WorkflowEventBus, StateManager, AgentPool, TeamManager, WorkflowContext, WorkflowRuntime } = require('../scripts/workflow-runtime.js');
 
 describe('WorkflowEventBus', () => {
   test('emits events as JSON lines', () => {
@@ -384,5 +384,77 @@ describe('WorkflowContext', () => {
     assert.strictEqual(stats.total, 2);
     assert.strictEqual(stats.active, 2);
     assert.strictEqual(stats.completed, 0);
+  });
+});
+
+describe('WorkflowRuntime', () => {
+  test('executes workflow function', async () => {
+    const runtime = new WorkflowRuntime();
+    
+    const result = await runtime.execute(async (ctx) => {
+      return { success: true };
+    });
+    
+    assert.deepStrictEqual(result, { success: true });
+  });
+
+  test('provides WorkflowContext to workflow function', async () => {
+    const runtime = new WorkflowRuntime();
+    
+    const result = await runtime.execute(async (ctx) => {
+      assert.ok(ctx.spawnAgent);
+      assert.ok(ctx.setMemory);
+      assert.ok(ctx.verify);
+      return { ok: true };
+    });
+    
+    assert.ok(result);
+  });
+
+  test('emits workflow_start event', async () => {
+    const runtime = new WorkflowRuntime();
+    const events = [];
+    
+    runtime.bus.on('workflow_start', (data) => events.push(data));
+    
+    await runtime.execute(async (ctx) => 'done');
+    
+    assert.strictEqual(events.length, 1);
+  });
+
+  test('emits workflow_complete event', async () => {
+    const runtime = new WorkflowRuntime();
+    const events = [];
+    
+    runtime.bus.on('workflow_complete', (data) => events.push(data));
+    
+    await runtime.execute(async (ctx) => 'done');
+    
+    assert.strictEqual(events.length, 1);
+  });
+
+  test('emits workflow_error on failure', async () => {
+    const runtime = new WorkflowRuntime();
+    const events = [];
+    
+    runtime.bus.on('workflow_error', (data) => events.push(data));
+    
+    await assert.rejects(
+      () => runtime.execute(async (ctx) => { throw new Error('boom'); }),
+      /boom/
+    );
+    
+    assert.strictEqual(events.length, 1);
+  });
+
+  test('exports all classes', () => {
+    const exported = require('../scripts/workflow-runtime.js');
+    
+    assert.ok(exported.WorkflowEventBus);
+    assert.ok(exported.StateManager);
+    assert.ok(exported.AgentPool);
+    assert.ok(exported.TeamManager);
+    assert.ok(exported.WorkflowContext);
+    assert.ok(exported.WorkflowRuntime);
   });
 });

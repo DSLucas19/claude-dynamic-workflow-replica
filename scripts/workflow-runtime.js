@@ -18,6 +18,7 @@ class WorkflowEventBus extends EventEmitter {
       ...data
     });
     super.emit('event', event);
+    super.emit(type, data);
     process.stdout.write(event + '\n');
     return true;
   }
@@ -361,4 +362,52 @@ class WorkflowContext {
   }
 }
 
-module.exports = { WorkflowEventBus, StateManager, AgentPool, TeamManager, WorkflowContext };
+class WorkflowRuntime {
+  constructor(options = {}) {
+    this.bus = new WorkflowEventBus();
+    this.state = new StateManager();
+    this.pool = new AgentPool(options);
+    this.teamManager = new TeamManager(this.pool, options);
+    this.stateFile = options.stateFile || null;
+  }
+
+  async execute(workflowFn) {
+    this.bus.emit('workflow_start', {
+      timestamp: Date.now()
+    });
+
+    const ctx = new WorkflowContext({
+      pool: this.pool,
+      teamManager: this.teamManager,
+      bus: this.bus,
+      state: this.state
+    });
+
+    try {
+      const result = await workflowFn(ctx);
+
+      this.bus.emit('workflow_complete', {
+        timestamp: Date.now(),
+        result
+      });
+
+      if (this.stateFile) {
+        const fs = require('fs');
+        fs.writeFileSync(
+          this.stateFile,
+          JSON.stringify(this.state.toJSON(), null, 2)
+        );
+      }
+
+      return result;
+    } catch (error) {
+      this.bus.emit('workflow_error', {
+        timestamp: Date.now(),
+        error: error.message
+      });
+      throw error;
+    }
+  }
+}
+
+module.exports = { WorkflowEventBus, StateManager, AgentPool, TeamManager, WorkflowContext, WorkflowRuntime };
